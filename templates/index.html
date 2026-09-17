@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <title>투자 타이밍 터미널 (Noto Sans KR)</title>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        * { font-family: 'Noto Sans KR', sans-serif; box-sizing: border-box; }
+        body { background-color: #111; color: #eee; margin: 0; display: flex; height: 100vh; overflow: hidden; }
+        
+        .left-panel { width: 300px; padding: 20px; background-color: #2a2a2e; border-right: 1px solid #444; display: flex; flex-direction: column; }
+        .watchlist-title { font-size: 18px; font-weight: 700; margin-bottom: 20px; color: #fff; text-transform: uppercase; }
+        .favorites-list { display: flex; flex-direction: column; gap: 10px; overflow-y: auto; flex-grow: 1; }
+        
+        .favorites-list button { text-align: left; background: #3a3a3e; color: #ddd; border: none; padding: 12px; border-radius: 6px; cursor: pointer; transition: 0.2s; font-size: 14px; font-weight: 500;}
+        .favorites-list button:hover { background: #4a4a4e; color: #fff; }
+        .favorites-list button.active { background-color: #444; color: #fff; font-weight: 700; }
+        
+        .search-box { display: flex; gap: 8px; margin-top: 20px; }
+        input { padding: 10px; background-color: #3a3a3e; border: 1px solid #444; color: #eee; border-radius: 4px; flex-grow: 1; outline: none; }
+        .btn-search { padding: 10px 16px; background-color: #222; color: #fff; border: 1px solid #444; border-radius: 4px; cursor: pointer; font-weight: 500;}
+        .btn-search:hover { background-color: #444; }
+
+        .right-panel { flex-grow: 1; padding: 20px 40px; display: flex; flex-direction: column; }
+        .main-quote { font-size: 16px; font-weight: 500; color: #aaa; margin-bottom: 15px; font-style: italic; text-align: right;}
+        
+        .stock-summary { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 20px; }
+        .stock-name { font-size: 18px; font-weight: 700; color: #fff; }
+        .current-price { font-size: 36px; font-weight: 700; color: #fff; margin: 4px 0; }
+        .change-info { font-size: 14px; font-weight: 500; }
+        
+        .signal-badge-container { text-align: right; }
+        .badge { padding: 10px 20px; border-radius: 6px; font-weight: 700; font-size: 15px; text-transform: uppercase;}
+        .badge-golden { background-color: #2196f3; color: #fff; } 
+        .badge-death { background-color: #f44336; color: #fff; }  
+        .badge-hold { background-color: #666; color: #fff; }
+
+        .emphasis-text { font-size: 16px; color: #9c27b0; font-weight: 700; margin-top: 10px; display: block;}
+        
+        .chart-container { flex-grow: 1; background-color: #1a1a1f; border: 1px solid #444; border-radius: 8px; padding: 10px; display: flex; position: relative; }
+        canvas { width: 100% !important; height: 100% !important; }
+    </style>
+</head>
+<body>
+    <div class="left-panel">
+        <h1 class="watchlist-title">Watchlist</h1>
+        <div class="favorites-list" id="favoritesContainer"></div>
+        
+        <div class="search-box">
+            <input type="text" id="ticker" placeholder="종목코드 (예: AAPL)" value="^GSPC">
+            <button class="btn-search" onclick="fetchData(document.getElementById('ticker').value)">분석</button>
+        </div>
+    </div>
+
+    <div class="right-panel">
+        <p class="main-quote">"돈을 버는 가장 확실한 방법은 돈을 잃지 않는 것이다." -Warren Buffett</p>
+        
+        <div class="stock-summary" id="stockSummary">
+            <!-- DOM 요소가 덮어씌워지지 않도록 ID 보존 -->
+            <div class="quote-info" id="quoteInfo"></div>
+            <div class="signal-badge-container" id="signalBadgeContainer"></div>
+        </div>
+        
+        <div class="chart-container">
+            <canvas id="stockChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        let chart;
+        
+        const myStocks = [
+            { ticker: 'TSLA', name: '테슬라' },
+            { ticker: 'JPM', name: 'JP모건' },
+            { ticker: '^GSPC', name: 'S&P 500' },
+            { ticker: 'BRK-B', name: '버크셔 B' },
+            { ticker: 'MSFT', name: '마이크로소프트' },
+            { ticker: '011070.KS', name: 'LG이노텍' }
+        ];
+
+        async function loadFavorites() {
+            const container = document.getElementById('favoritesContainer');
+            myStocks.forEach(stock => {
+                const btn = document.createElement('button');
+                btn.id = `btn-${stock.ticker}`;
+                btn.innerHTML = `${stock.name}`; 
+                btn.onclick = () => {
+                    document.getElementById('ticker').value = stock.ticker;
+                    fetchData(stock.ticker);
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function getSignalBadgeClass(signalText) {
+            if (signalText.includes("매수")) return "badge badge-golden";
+            if (signalText.includes("매도")) return "badge badge-death";
+            return "badge badge-hold";
+        }
+
+        function createStockSummaryHtml(name, price, changePercent) {
+            const changeColor = changePercent >= 0 ? '#4caf50' : '#f44336';
+            // 전체 div 대신 안쪽 내용만 반환
+            return `<p><span class="stock-name">${name}</span></p><p class="current-price">${price.toFixed(2)}</p><p class="change-info" style="color: ${changeColor};">${changePercent.toFixed(2)}%</p>`;
+        }
+
+        async function fetchData(targetTicker) {
+            const ticker = targetTicker || document.getElementById('ticker').value;
+            const signalTextContainer = document.getElementById('signalBadgeContainer');
+            const quoteInfoContainer = document.getElementById('quoteInfo');
+            
+            signalTextContainer.innerHTML = "데이터 분석 중...";
+            quoteInfoContainer.innerHTML = '<p><span class="stock-name">로딩 중...</span></p>';
+
+            if(chart) {
+                chart.destroy();
+                chart = null;
+            }
+            
+            myStocks.forEach(s => {
+                const btn = document.getElementById(`btn-${s.ticker}`);
+                if(btn) btn.classList.remove('active');
+            });
+            const activeBtn = document.getElementById(`btn-${ticker}`);
+            if(activeBtn) activeBtn.classList.add('active');
+
+            try {
+                const res = await fetch(`/api/${encodeURIComponent(ticker)}`, { cache: 'no-store' });
+                const data = await res.json();
+                
+                if(data.error) {
+                    signalTextContainer.innerText = "데이터 오류: " + data.error;
+                    return;
+                }
+                
+                const closeArray = data.close;
+                const currentPrice = closeArray[closeArray.length - 1];
+                const prevPrice = closeArray[closeArray.length - 2];
+                const changePercent = ((currentPrice - prevPrice) / prevPrice) * 100;
+                const stockName = myStocks.find(s => s.ticker === ticker)?.name || ticker;
+
+                // stockSummary 전체가 아닌 quoteInfo와 signalBadgeContainer 각각 업데이트
+                quoteInfoContainer.innerHTML = createStockSummaryHtml(stockName, currentPrice, changePercent);
+                signalTextContainer.innerHTML = `<span class="${getSignalBadgeClass(data.signal)}">${data.signal}</span><span class="emphasis-text">${data.emphasis}</span>`;
+                
+                const ctx = document.getElementById('stockChart').getContext('2d');
+                
+                chart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.dates,
+                        datasets: [
+                            { label: '종가', data: data.close, borderColor: '#fff', borderWidth: 2, pointRadius: 0, tension: 0.1 },
+                            { label: '20일선', data: data.ma20, borderColor: '#fbbc04', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+                            { label: '60일선', data: data.ma60, borderColor: '#4285f4', borderWidth: 1.5, pointRadius: 0, tension: 0.2 },
+                            { label: '120일 장기선', data: data.ma120, borderColor: '#ea4335', borderWidth: 1.5, borderDash: [5, 5], pointRadius: 0, tension: 0.2 },
+                            { label: '매수 🔺', data: data.buy_signals, backgroundColor: '#ea4335', borderColor: '#ea4335', pointStyle: 'triangle', pointRadius: 7, pointHoverRadius: 10, showLine: false },
+                            { label: '매도 🔻', data: data.sell_signals, backgroundColor: '#4285f4', borderColor: '#4285f4', pointStyle: 'triangle', rotation: 180, pointRadius: 7, pointHoverRadius: 10, showLine: false },
+                            { label: '강력돌파', data: data.breakout_signals, backgroundColor: '#9c27b0', borderColor: '#9c27b0', pointStyle: 'rect', pointRadius: 8, pointHoverRadius: 10, showLine: false } 
+                        ]
+                    },
+                    options: { 
+                        responsive: true, 
+                        maintainAspectRatio: false,
+                        interaction: { mode: 'index', intersect: false },
+                        plugins: {
+                            legend: {
+                                labels: {
+                                    usePointStyle: true,
+                                    boxWidth: 10,
+                                    padding: 20,
+                                    font: { size: 13, color: '#aaa', family: "'Noto Sans KR', sans-serif" }
+                                }
+                            }
+                        },
+                        scales: {
+                            x: {
+                                ticks: {
+                                    family: "'Noto Sans KR', sans-serif",
+                                    autoSkip: false,
+                                    maxRotation: 45,
+                                    minRotation: 45,
+                                    callback: function(val, index) {
+                                        const dateStr = data.dates[index];
+                                        if (data.has_signal[index]) return '🔔 ' + dateStr;
+                                        
+                                        const prevDateStr = index > 0 ? data.dates[index-1] : '';
+                                        const currentMonth = dateStr.substring(5, 7);
+                                        const prevMonth = prevDateStr.substring(5, 7);
+                                        if (currentMonth !== prevMonth) return dateStr;
+                                        
+                                        return '';
+                                    },
+                                    color: function(context) {
+                                        if (data.has_signal[context.index]) return '#9c27b0';
+                                        return '#aaa';
+                                    },
+                                    font: function(context) {
+                                        if (data.has_signal[context.index]) return { weight: 'bold', family: "'Noto Sans KR', sans-serif" };
+                                        return { weight: 'normal', family: "'Noto Sans KR', sans-serif" };
+                                    }
+                                },
+                                grid: { color: '#444' }
+                            },
+                            y: { grid: { color: '#444' }, ticks: { font: { family: "'Noto Sans KR', sans-serif" } } }
+                        }
+                    }
+                });
+            } catch(e) { signalTextContainer.innerText = "서버 통신 실패: " + e.message; }
+        }
+        
+        loadFavorites();
+        fetchData('^GSPC'); 
+    </script>
+</body>
+</html>
